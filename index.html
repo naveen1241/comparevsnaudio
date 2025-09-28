@@ -76,6 +76,7 @@
 </div>
 
 <script>
+<script>
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const compareBtn = document.getElementById('compareBtn');
@@ -88,6 +89,7 @@
     let audioChunks = [];
     let referenceAudioBuffer;
 
+    // Correctly using the MP3 file hosted on GitHub Pages
     const referenceAudioUrl = 'https://naveen1241.github.io/comparevsnaudio/01%20VSN%20Shlokam%20No.%201.mp3';
 
     async function loadReferenceAudio() {
@@ -151,7 +153,6 @@
             statusDiv.classList.add('error-message');
             return;
         }
-
         if (audioChunks.length === 0) {
             statusDiv.textContent = 'Error: Input recording is missing. Please record audio first.';
             statusDiv.classList.add('error-message');
@@ -166,54 +167,25 @@
             const recordedBlob = new Blob(audioChunks, { 'type' : 'audio/webm' });
             const arrayBuffer = await recordedBlob.arrayBuffer();
             const recordedAudioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-            // Create an OfflineAudioContext for comparison
-            const sampleRate = audioContext.sampleRate;
-            const duration = Math.max(referenceAudioBuffer.duration, recordedAudioBuffer.duration);
-            const offlineContext = new OfflineAudioContext(1, sampleRate * duration, sampleRate);
-
-            // --- Analyze reference audio ---
-            const refSource = offlineContext.createBufferSource();
-            refSource.buffer = referenceAudioBuffer;
-            const refAnalyser = offlineContext.createAnalyser();
-            refSource.connect(refAnalyser);
-            refAnalyser.connect(offlineContext.destination);
-
-            // --- Analyze recorded audio ---
-            const recSource = offlineContext.createBufferSource();
-            recSource.buffer = recordedAudioBuffer;
-            const recAnalyser = offlineContext.createAnalyser();
-            recSource.connect(recAnalyser);
-            recAnalyser.connect(offlineContext.destination);
-
-            // Create frequency data arrays for both
-            const frequencyDataRef = new Float32Array(refAnalyser.frequencyBinCount);
-            const frequencyDataRec = new Float32Array(recAnalyser.frequencyBinCount);
-
-            // Start sources
-            refSource.start();
-            recSource.start();
-
-            // Store frequency data over time
-            const referenceFrequencies = [];
-            const recordedFrequencies = [];
             
-            // Render the offline context and collect data
-            await offlineContext.startRendering();
+            const refData = referenceAudioBuffer.getChannelData(0);
+            const recData = recordedAudioBuffer.getChannelData(0);
 
-            // After rendering, collect a snapshot of frequency data
-            refAnalyser.getFloatFrequencyData(frequencyDataRef);
-            recAnalyser.getFloatFrequencyData(frequencyDataRec);
+            // Resample the shorter buffer to match the longer one
+            const longest = Math.max(refData.length, recData.length);
+            const resampledRef = resampleBuffer(refData, longest);
+            const resampledRec = resampleBuffer(recData, longest);
 
-            // --- PERFORM COMPARISON ---
+            // Perform sample-by-sample difference calculation
             let totalDiff = 0;
-            const len = Math.min(frequencyDataRef.length, frequencyDataRec.length);
-            for (let i = 0; i < len; i++) {
-                totalDiff += Math.abs(frequencyDataRef[i] - frequencyDataRec[i]);
+            for (let i = 0; i < longest; i++) {
+                totalDiff += Math.abs(resampledRef[i] - resampledRec[i]);
             }
 
-            const maxPossibleDiff = len * 255; // Using 255 as max frequency value
-            const similarity = 1 - (totalDiff / maxPossibleDiff);
+            // Calculate similarity based on the average difference
+            const avgDiff = totalDiff / longest;
+            const maxPossibleDiff = 2.0; // The sample values are floats between -1 and 1
+            const similarity = 1 - (avgDiff / maxPossibleDiff);
             const percentage = (similarity * 100).toFixed(2);
 
             resultDiv.textContent = `Similarity: ${percentage}%`;
@@ -227,8 +199,30 @@
         }
     };
 
+    /**
+     * Helper function to resample an AudioBuffer to a new length.
+     * @param {Float32Array} buffer - The input audio buffer data.
+     * @param {number} newLength - The new desired length.
+     * @returns {Float32Array} The resampled buffer.
+     */
+    function resampleBuffer(buffer, newLength) {
+        if (buffer.length === newLength) {
+            return buffer;
+        }
+        
+        const resampled = new Float32Array(newLength);
+        const ratio = buffer.length / newLength;
+        
+        for (let i = 0; i < newLength; i++) {
+            const index = Math.floor(i * ratio);
+            resampled[i] = buffer[index];
+        }
+        return resampled;
+    }
+
     window.onload = loadReferenceAudio;
 </script>
+
 
 
 </body>
