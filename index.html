@@ -87,11 +87,8 @@
     let mediaRecorder;
     let audioChunks = [];
     let referenceAudioBuffer;
-    
-    // --- Step 1: Load the reference audio file ---
-    // Make sure to replace this URL with a valid, accessible audio file (.wav, .mp3)
-    const referenceAudioUrl = '01%20VSN%20Shlokam%20No.%201.mp3';
 
+    const referenceAudioUrl = 'https://naveen1241.github.io/comparevsnaudio/01%20VSN%20Shlokam%20No.%201.mp3';
 
     async function loadReferenceAudio() {
         if (!audioContext) {
@@ -100,38 +97,40 @@
         statusDiv.textContent = 'Loading reference audio...';
         try {
             const response = await fetch(referenceAudioUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             const arrayBuffer = await response.arrayBuffer();
             referenceAudioBuffer = await audioContext.decodeAudioData(arrayBuffer);
             statusDiv.textContent = 'Reference audio loaded. Ready.';
             startBtn.disabled = false;
         } catch (error) {
-            statusDiv.textContent = `Error loading audio: ${error.message}`;
+            statusDiv.textContent = 'Error: The comparison target audio could not be loaded.';
+            statusDiv.classList.add('error-message');
             console.error('Error loading reference audio:', error);
         }
     }
 
-    // --- Step 2: Handle recording from the microphone ---
     startBtn.onclick = async () => {
         try {
             micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorder = new MediaRecorder(micStream);
             audioChunks = [];
-            
+
             mediaRecorder.ondataavailable = event => {
                 audioChunks.push(event.data);
             };
 
-            mediaRecorder.onstop = () => {
-                // Not performing the comparison here, we do it via a dedicated button
-            };
-
             mediaRecorder.start();
-            statusDiv.textContent = 'Recording...';
+            statusDiv.textContent = 'Recording... Press "Stop" when finished.';
+            statusDiv.classList.remove('error-message');
+            resultDiv.textContent = '';
             startBtn.disabled = true;
             stopBtn.disabled = false;
             compareBtn.disabled = true;
         } catch (err) {
-            statusDiv.textContent = `Error accessing microphone: ${err.message}`;
+            statusDiv.textContent = 'Error: Microphone access was denied or is unavailable.';
+            statusDiv.classList.add('error-message');
             console.error('Error accessing microphone:', err);
         }
     };
@@ -139,13 +138,13 @@
     stopBtn.onclick = () => {
         mediaRecorder.stop();
         micStream.getTracks().forEach(track => track.stop());
-        statusDiv.textContent = 'Recording stopped.';
+        statusDiv.textContent = 'Recording stopped. Press "Compare" to proceed.';
+        statusDiv.classList.remove('error-message');
         startBtn.disabled = false;
         stopBtn.disabled = true;
         compareBtn.disabled = false;
     };
 
-    // --- Step 3: Compare audio using the Web Audio API ---
     compareBtn.onclick = async () => {
         if (!referenceAudioBuffer) {
             statusDiv.textContent = 'Error: The comparison target audio is missing.';
@@ -158,7 +157,7 @@
             statusDiv.classList.add('error-message');
             return;
         }
-        
+
         statusDiv.textContent = 'Comparing audio...';
         statusDiv.classList.remove('error-message');
         compareBtn.disabled = true;
@@ -167,83 +166,70 @@
             const recordedBlob = new Blob(audioChunks, { 'type' : 'audio/webm' });
             const arrayBuffer = await recordedBlob.arrayBuffer();
             const recordedAudioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+            // Create an OfflineAudioContext for comparison
+            const sampleRate = audioContext.sampleRate;
+            const duration = Math.max(referenceAudioBuffer.duration, recordedAudioBuffer.duration);
+            const offlineContext = new OfflineAudioContext(1, sampleRate * duration, sampleRate);
+
+            // --- Analyze reference audio ---
+            const refSource = offlineContext.createBufferSource();
+            refSource.buffer = referenceAudioBuffer;
+            const refAnalyser = offlineContext.createAnalyser();
+            refSource.connect(refAnalyser);
+            refAnalyser.connect(offlineContext.destination);
+
+            // --- Analyze recorded audio ---
+            const recSource = offlineContext.createBufferSource();
+            recSource.buffer = recordedAudioBuffer;
+            const recAnalyser = offlineContext.createAnalyser();
+            recSource.connect(recAnalyser);
+            recAnalyser.connect(offlineContext.destination);
+
+            // Create frequency data arrays for both
+            const frequencyDataRef = new Float32Array(refAnalyser.frequencyBinCount);
+            const frequencyDataRec = new Float32Array(recAnalyser.frequencyBinCount);
+
+            // Start sources
+            refSource.start();
+            recSource.start();
+
+            // Store frequency data over time
+            const referenceFrequencies = [];
+            const recordedFrequencies = [];
             
-            // --- FIX START ---
-            // Create a GainNode to prevent double playback during analysis if needed
-            const gainNode = audioContext.createGain();
-            gainNode.connect(audioContext.destination);
+            // Render the offline context and collect data
+            await offlineContext.startRendering();
 
-            // Set up Analysers
-            const analyserRef = audioContext.createAnalyser();
-            const analyserRec = audioContext.createAnalyser();
-            analyserRef.fftSize = 2048;
-            analyserRec.fftSize = 2048;
+            // After rendering, collect a snapshot of frequency data
+            refAnalyser.getFloatFrequencyData(frequencyDataRef);
+            recAnalyser.getFloatFrequencyData(frequencyDataRec);
 
-            const bufferRef = audioContext.createBufferSource();
-            bufferRef.buffer = referenceAudioBuffer;
-            bufferRef.connect(analyserRef);
-            analyserRef.connect(gainNode); // Connect to gain node instead of destination
-
-            const bufferRec = audioContext.createBufferSource();
-            bufferRec.buffer = recordedAudioBuffer;
-            bufferRec.connect(analyserRec);
-            analyserRec.connect(gainNode); // Connect to gain node instead of destination
-
-            const frequencyDataRef = new Uint8Array(analyserRef.frequencyBinCount);
-            const frequencyDataRec = new Uint8Array(analyserRec.frequencyBinCount);
-            
+            // --- PERFORM COMPARISON ---
             let totalDiff = 0;
-            let totalFrames = 0;
             const len = Math.min(frequencyDataRef.length, frequencyDataRec.length);
+            for (let i = 0; i < len; i++) {
+                totalDiff += Math.abs(frequencyDataRef[i] - frequencyDataRec[i]);
+            }
 
-            const intervalId = setInterval(() => {
-                // Get fresh data from the analyzers
-                analyserRef.getByteFrequencyData(frequencyDataRef);
-                analyserRec.getByteFrequencyData(frequencyDataRec);
+            const maxPossibleDiff = len * 255; // Using 255 as max frequency value
+            const similarity = 1 - (totalDiff / maxPossibleDiff);
+            const percentage = (similarity * 100).toFixed(2);
 
-                let diff = 0;
-                for (let i = 0; i < len; i++) {
-                    diff += Math.abs(frequencyDataRef[i] - frequencyDataRec[i]);
-                }
-                totalDiff += diff;
-                totalFrames++;
-            }, 100); // Poll data every 100ms
-
-            // Start playback of both audio sources
-            bufferRef.start();
-            bufferRec.start();
-
-            // Stop analysis and calculate score after audio ends
-            const maxDuration = Math.max(referenceAudioBuffer.duration, recordedAudioBuffer.duration) * 1000;
-            setTimeout(() => {
-                clearInterval(intervalId);
-                gainNode.disconnect(); // Disconnect to stop playback
-
-                if (totalFrames === 0) {
-                    throw new Error("Could not collect analysis data.");
-                }
-                
-                const maxPossibleDiff = 255 * len;
-                const avgDiff = totalDiff / totalFrames;
-                const similarity = 1 - (avgDiff / maxPossibleDiff);
-                const percentage = (similarity * 100).toFixed(2);
-
-                resultDiv.textContent = `Similarity: ${percentage}%`;
-                statusDiv.textContent = 'Comparison complete.';
-                compareBtn.disabled = false;
-            }, maxDuration + 500); // Wait for audio to finish, plus a buffer
-
+            resultDiv.textContent = `Similarity: ${percentage}%`;
+            statusDiv.textContent = 'Comparison complete.';
         } catch (error) {
             statusDiv.textContent = `An unexpected error occurred during comparison: ${error.message}`;
             statusDiv.classList.add('error-message');
             console.error('Comparison error:', error);
+        } finally {
             compareBtn.disabled = false;
         }
     };
+
     window.onload = loadReferenceAudio;
-
-
 </script>
+
 
 </body>
 </html>
