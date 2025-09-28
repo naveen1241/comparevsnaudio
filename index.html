@@ -52,10 +52,15 @@
             margin-top: 1.5em;
             font-size: 1.2em;
             font-weight: bold;
+            color: #333;
         }
         #status {
             margin-top: 1em;
             color: #555;
+            min-height: 20px;
+        }
+        .error-message {
+            color: #d9534f;
         }
     </style>
 </head>
@@ -71,11 +76,10 @@
         <button id="compareBtn" disabled>Compare</button>
     </div>
 
-    <div id="status">Ready.</div>
+    <div id="status">Loading reference audio...</div>
     <div id="result"></div>
 </div>
 
-<script>
 <script>
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
@@ -89,7 +93,7 @@
     let audioChunks = [];
     let referenceAudioBuffer;
 
-    // Correctly using the MP3 file hosted on GitHub Pages
+    // Use the URL from your GitHub Pages deployment for the reference audio
     const referenceAudioUrl = 'https://naveen1241.github.io/comparevsnaudio/01%20VSN%20Shlokam%20No.%201.mp3';
 
     async function loadReferenceAudio() {
@@ -173,6 +177,15 @@
 
             // Resample the shorter buffer to match the longer one
             const longest = Math.max(refData.length, recData.length);
+
+            // Add a check to prevent division by zero
+            if (longest === 0) {
+                resultDiv.textContent = `Error: The recorded audio has zero length.`;
+                statusDiv.textContent = 'Comparison failed.';
+                compareBtn.disabled = false;
+                return;
+            }
+
             const resampledRef = resampleBuffer(refData, longest);
             const resampledRec = resampleBuffer(recData, longest);
 
@@ -222,8 +235,6 @@
 
     window.onload = loadReferenceAudio;
 </script>
-
-
 
 </body>
 </html>
