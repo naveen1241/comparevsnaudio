@@ -168,57 +168,78 @@
             const arrayBuffer = await recordedBlob.arrayBuffer();
             const recordedAudioBuffer = await audioContext.decodeAudioData(arrayBuffer);
             
-            const referenceData = referenceAudioBuffer.getChannelData(0);
-            const recordedData = recordedAudioBuffer.getChannelData(0);
+            // --- FIX START ---
+            // Create a GainNode to prevent double playback during analysis if needed
+            const gainNode = audioContext.createGain();
+            gainNode.connect(audioContext.destination);
 
-            // Resizing for simplified comparison
-            const maxLength = Math.max(referenceData.length, recordedData.length);
-            const refPadded = new Float32Array(maxLength);
-            const recPadded = new Float32Array(maxLength);
-            refPadded.set(referenceData);
-            recPadded.set(recordedData);
-
+            // Set up Analysers
             const analyserRef = audioContext.createAnalyser();
             const analyserRec = audioContext.createAnalyser();
-            
             analyserRef.fftSize = 2048;
             analyserRec.fftSize = 2048;
-            
+
             const bufferRef = audioContext.createBufferSource();
             bufferRef.buffer = referenceAudioBuffer;
             bufferRef.connect(analyserRef);
+            analyserRef.connect(gainNode); // Connect to gain node instead of destination
 
             const bufferRec = audioContext.createBufferSource();
             bufferRec.buffer = recordedAudioBuffer;
             bufferRec.connect(analyserRec);
+            analyserRec.connect(gainNode); // Connect to gain node instead of destination
 
             const frequencyDataRef = new Uint8Array(analyserRef.frequencyBinCount);
             const frequencyDataRec = new Uint8Array(analyserRec.frequencyBinCount);
-
-            analyserRef.getByteFrequencyData(frequencyDataRef);
-            analyserRec.getByteFrequencyData(frequencyDataRec);
-
-            let diff = 0;
+            
+            let totalDiff = 0;
+            let totalFrames = 0;
             const len = Math.min(frequencyDataRef.length, frequencyDataRec.length);
-            for (let i = 0; i < len; i++) {
-                diff += Math.abs(frequencyDataRef[i] - frequencyDataRec[i]);
-            }
 
-            const maxDiff = 255 * len;
-            const similarity = 1 - (diff / maxDiff);
-            const percentage = (similarity * 100).toFixed(2);
+            const intervalId = setInterval(() => {
+                // Get fresh data from the analyzers
+                analyserRef.getByteFrequencyData(frequencyDataRef);
+                analyserRec.getByteFrequencyData(frequencyDataRec);
 
-            resultDiv.textContent = `Similarity: ${percentage}%`;
-            statusDiv.textContent = 'Comparison complete.';
+                let diff = 0;
+                for (let i = 0; i < len; i++) {
+                    diff += Math.abs(frequencyDataRef[i] - frequencyDataRec[i]);
+                }
+                totalDiff += diff;
+                totalFrames++;
+            }, 100); // Poll data every 100ms
+
+            // Start playback of both audio sources
+            bufferRef.start();
+            bufferRec.start();
+
+            // Stop analysis and calculate score after audio ends
+            const maxDuration = Math.max(referenceAudioBuffer.duration, recordedAudioBuffer.duration) * 1000;
+            setTimeout(() => {
+                clearInterval(intervalId);
+                gainNode.disconnect(); // Disconnect to stop playback
+
+                if (totalFrames === 0) {
+                    throw new Error("Could not collect analysis data.");
+                }
+                
+                const maxPossibleDiff = 255 * len;
+                const avgDiff = totalDiff / totalFrames;
+                const similarity = 1 - (avgDiff / maxPossibleDiff);
+                const percentage = (similarity * 100).toFixed(2);
+
+                resultDiv.textContent = `Similarity: ${percentage}%`;
+                statusDiv.textContent = 'Comparison complete.';
+                compareBtn.disabled = false;
+            }, maxDuration + 500); // Wait for audio to finish, plus a buffer
+
         } catch (error) {
             statusDiv.textContent = `An unexpected error occurred during comparison: ${error.message}`;
             statusDiv.classList.add('error-message');
             console.error('Comparison error:', error);
-        } finally {
             compareBtn.disabled = false;
         }
     };
-
     window.onload = loadReferenceAudio;
 
 
