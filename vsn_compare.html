@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Comparison Tool</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            padding: 2em;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .buttons {
+            margin-top: 1.5em;
+        }
+        button {
+            padding: 0.8em 1.5em;
+            margin: 0.5em;
+            font-size: 1em;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            transition: background-color 0.3s ease;
+        }
+        #startBtn {
+            background-color: #4CAF50;
+        }
+        #stopBtn {
+            background-color: #f44336;
+        }
+        #compareBtn {
+            background-color: #2196F3;
+        }
+        #startBtn:disabled, #stopBtn:disabled, #compareBtn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #result {
+            margin-top: 1.5em;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        #status {
+            margin-top: 1em;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Audio Comparison Tool</h1>
+    <p>Press "Start Recording," say something, then press "Stop" and "Compare."</p>
+
+    <div class="buttons">
+        <button id="startBtn">Start Recording</button>
+        <button id="stopBtn" disabled>Stop Recording</button>
+        <button id="compareBtn" disabled>Compare</button>
+    </div>
+
+    <div id="status">Ready.</div>
+    <div id="result"></div>
+</div>
+
+<script>
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const compareBtn = document.getElementById('compareBtn');
+    const statusDiv = document.getElementById('status');
+    const resultDiv = document.getElementById('result');
+
+    let audioContext;
+    let micStream;
+    let mediaRecorder;
+    let audioChunks = [];
+    let referenceAudioBuffer;
+    
+    // --- Step 1: Load the reference audio file ---
+    // Make sure to replace this URL with a valid, accessible audio file (.wav, .mp3)
+    const referenceAudioUrl = 'https://filedn.com/l9IDdY852i6RpBJQvovl9tY/vsn/01%20VSN%20Shlokam%20No.%201.mp3'; 
+
+    async function loadReferenceAudio() {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        statusDiv.textContent = 'Loading reference audio...';
+        try {
+            const response = await fetch(referenceAudioUrl);
+            const arrayBuffer = await response.arrayBuffer();
+            referenceAudioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            statusDiv.textContent = 'Reference audio loaded. Ready.';
+            startBtn.disabled = false;
+        } catch (error) {
+            statusDiv.textContent = `Error loading audio: ${error.message}`;
+            console.error('Error loading reference audio:', error);
+        }
+    }
+
+    // --- Step 2: Handle recording from the microphone ---
+    startBtn.onclick = async () => {
+        try {
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(micStream);
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                // Not performing the comparison here, we do it via a dedicated button
+            };
+
+            mediaRecorder.start();
+            statusDiv.textContent = 'Recording...';
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            compareBtn.disabled = true;
+        } catch (err) {
+            statusDiv.textContent = `Error accessing microphone: ${err.message}`;
+            console.error('Error accessing microphone:', err);
+        }
+    };
+
+    stopBtn.onclick = () => {
+        mediaRecorder.stop();
+        micStream.getTracks().forEach(track => track.stop());
+        statusDiv.textContent = 'Recording stopped.';
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        compareBtn.disabled = false;
+    };
+
+    // --- Step 3: Compare audio using the Web Audio API ---
+    compareBtn.onclick = async () => {
+        if (!referenceAudioBuffer) {
+            statusDiv.textContent = 'Error: The comparison target audio is missing.';
+            statusDiv.classList.add('error-message');
+            return;
+        }
+
+        if (audioChunks.length === 0) {
+            statusDiv.textContent = 'Error: Input recording is missing. Please record audio first.';
+            statusDiv.classList.add('error-message');
+            return;
+        }
+        
+        statusDiv.textContent = 'Comparing audio...';
+        statusDiv.classList.remove('error-message');
+        compareBtn.disabled = true;
+
+        try {
+            const recordedBlob = new Blob(audioChunks, { 'type' : 'audio/webm' });
+            const arrayBuffer = await recordedBlob.arrayBuffer();
+            const recordedAudioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            const referenceData = referenceAudioBuffer.getChannelData(0);
+            const recordedData = recordedAudioBuffer.getChannelData(0);
+
+            // Resizing for simplified comparison
+            const maxLength = Math.max(referenceData.length, recordedData.length);
+            const refPadded = new Float32Array(maxLength);
+            const recPadded = new Float32Array(maxLength);
+            refPadded.set(referenceData);
+            recPadded.set(recordedData);
+
+            const analyserRef = audioContext.createAnalyser();
+            const analyserRec = audioContext.createAnalyser();
+            
+            analyserRef.fftSize = 2048;
+            analyserRec.fftSize = 2048;
+            
+            const bufferRef = audioContext.createBufferSource();
+            bufferRef.buffer = referenceAudioBuffer;
+            bufferRef.connect(analyserRef);
+
+            const bufferRec = audioContext.createBufferSource();
+            bufferRec.buffer = recordedAudioBuffer;
+            bufferRec.connect(analyserRec);
+
+            const frequencyDataRef = new Uint8Array(analyserRef.frequencyBinCount);
+            const frequencyDataRec = new Uint8Array(analyserRec.frequencyBinCount);
+
+            analyserRef.getByteFrequencyData(frequencyDataRef);
+            analyserRec.getByteFrequencyData(frequencyDataRec);
+
+            let diff = 0;
+            const len = Math.min(frequencyDataRef.length, frequencyDataRec.length);
+            for (let i = 0; i < len; i++) {
+                diff += Math.abs(frequencyDataRef[i] - frequencyDataRec[i]);
+            }
+
+            const maxDiff = 255 * len;
+            const similarity = 1 - (diff / maxDiff);
+            const percentage = (similarity * 100).toFixed(2);
+
+            resultDiv.textContent = `Similarity: ${percentage}%`;
+            statusDiv.textContent = 'Comparison complete.';
+        } catch (error) {
+            statusDiv.textContent = `An unexpected error occurred during comparison: ${error.message}`;
+            statusDiv.classList.add('error-message');
+            console.error('Comparison error:', error);
+        } finally {
+            compareBtn.disabled = false;
+        }
+    };
+
+    window.onload = loadReferenceAudio;
+
+
+</script>
+
+</body>
+</html>
